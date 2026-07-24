@@ -28,7 +28,6 @@
   .header-text{flex:1;min-width:0;}
   .header-title{font-size:13.5px;font-weight:bold;color:var(--accent-dark);}
   .header-sub{font-size:11px;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .switch-btn{flex:0 0 auto;font-size:10px;font-weight:bold;color:var(--accent-dark);background:#fff;border:1px solid var(--border);border-radius:999px;padding:6px 10px;white-space:nowrap;font-family:inherit;}
   .subtabs{flex:0 0 auto;display:flex;gap:6px;padding:8px 14px;}
   .pill{flex:1;text-align:center;padding:9px 6px;border-radius:999px;border:1px solid var(--border);background:var(--card);cursor:pointer;font-size:12.5px;font-family:inherit;color:var(--ink);}
   .pill.active{background:var(--accent-dark);border-color:var(--accent-dark);color:#fff;font-weight:bold;}
@@ -551,8 +550,8 @@ function render(){
       <div class="header-text">
         <div class="header-title">My Bae-Gel &middot; Market</div>
         <div class="header-sub">${s.marketName || "No market selected"} &middot; ${fmtDate(Date.now())}</div>
+        <a class="linklike" style="font-size:10.5px;" onclick="confirmSwitchDevice('store')">Switch to Store device</a>
       </div>
-      <button class="switch-btn" onclick="confirmSwitchDevice('store')">Switch</button>
     </div>
     ${subtabsHtml}
     ${mainHtml}
