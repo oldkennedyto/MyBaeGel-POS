@@ -44,6 +44,16 @@
   .modal-card h3{margin:0 0 8px;}
   .modal-card .btn{margin-top:10px;}
   .modal-card .linklike{display:block;text-align:center;margin-top:12px;}
+  .chooser-wrap{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px;}
+  .chooser-card{background:var(--card);border:1px solid var(--border);border-radius:20px;padding:40px 48px;max-width:640px;width:100%;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,0.12);margin:0 auto;}
+  .chooser-card img{margin:0 auto 16px;}
+  .chooser-card h1{margin:0 0 6px;font-size:26px;color:var(--ink);}
+  .chooser-card .sub{font-size:13px;color:var(--ink-soft);margin:0 0 28px;}
+  .chooser-options{display:flex;gap:16px;}
+  .chooser-option{flex:1;border:2px solid var(--border);border-radius:16px;padding:28px 20px;cursor:pointer;background:#fff;}
+  .chooser-option:hover{border-color:var(--accent-dark);}
+  .chooser-option .co-title{font-size:19px;font-weight:bold;color:var(--accent-dark);margin-bottom:6px;}
+  .chooser-option .co-sub{font-size:12.5px;color:var(--ink-soft);}
   .subtabs{display:flex;gap:8px;margin-bottom:16px;max-width:560px;}
   .pillrow{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;}
   .pill{flex:1;min-width:100px;text-align:center;padding:10px 8px;border-radius:999px;border:1px solid var(--border);background:var(--card);cursor:pointer;font-size:13px;font-family:inherit;color:var(--ink);}
@@ -176,6 +186,43 @@ const state = {
   market: Object.assign(freshModeState(), {subtab:"opening"}),
   activeCat:"plain",
 };
+
+let deviceChosen = false;
+function chooseDevice(mode){
+  if(mode==="market"){ window.location.href = "market.html"; return; }
+  deviceChosen = true;
+  render();
+}
+function confirmSwitchDevice(target){
+  const s = state.store;
+  const hasData = s.tillStatus==="open" || s.day.items>0 || Object.keys(s.cart).length>0;
+  const msg = hasData
+    ? "Switch to Market mode? This device isn't saving data yet, so today's Store till status and sales on this iPad will be lost when you come back."
+    : "Switch to Market mode on this device?";
+  if(!window.confirm(msg)) return;
+  window.location.href = "market.html";
+}
+function renderDeviceChooser(){
+  return `
+    <div class="chooser-wrap">
+      <div class="chooser-card">
+        ${LOGO_SVG}
+        <h1>My Bae-Gel POS</h1>
+        <p class="sub">How is this device being used today?</p>
+        <div class="chooser-options">
+          <div class="chooser-option" onclick="chooseDevice('store')">
+            <div class="co-title">Store</div>
+            <div class="co-sub">Full POS on the iPad at the counter</div>
+          </div>
+          <div class="chooser-option" onclick="chooseDevice('market')">
+            <div class="co-title">Market</div>
+            <div class="co-sub">Phone-friendly POS for market stalls</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
 
 function ms(mode){ return mode==="dashboard" ? null : state[mode]; }
 function fmt(n){ return "$" + (Math.round(n*100)/100).toFixed(2); }
@@ -682,6 +729,10 @@ function renderDashboard(){
 }
 
 function render(){
+  if(!deviceChosen){
+    document.getElementById("app").innerHTML = renderDeviceChooser();
+    return;
+  }
   const combinedToday = state.store.day.revenue + state.market.day.revenue;
   let body = "";
   if(state.activeMode==="dashboard"){
@@ -709,12 +760,12 @@ function render(){
         <div class="header-status">
           <div class="hs-line">${fmtDate(Date.now())} &middot; <span id="live-clock">${fmtTime(Date.now())}</span></div>
           <div class="hs-till ${state.store.tillStatus==='open'?'ok':'off'}">Store till: ${state.store.tillStatus==='open'?'OPEN':'CLOSED'}</div>
+          <a class="linklike" style="font-size:10.5px;" onclick="confirmSwitchDevice('market')">Switch to Market device</a>
         </div>
       </div>
       <div class="topbar-right">
         <div class="mode-tabs">
           <button class="pill ${state.activeMode==='store'?'active':''}" onclick="setMode('store')">Store</button>
-          <button class="pill ${state.activeMode==='market'?'active':''}" onclick="setMode('market')">Market</button>
           <button class="pill ${state.activeMode==='dashboard'?'active':''}" onclick="setMode('dashboard')">Dashboard</button>
         </div>
         <div class="today-badge"><div class="lbl">Today, combined</div><div class="val">${fmt(combinedToday)}</div></div>
