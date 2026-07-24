@@ -22,7 +22,7 @@
     -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:manipulation;
     padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);}
   input,textarea{-webkit-user-select:text;user-select:text;}
-  .app{max-width:1024px;margin:0 auto;padding:20px 24px 60px;}
+  .app{max-width:1024px;margin:0 auto;padding:16px 24px 20px;}
   .topbar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px;margin-bottom:14px;}
   .brand-name{font-size:12px;letter-spacing:2px;color:var(--accent-dark);font-weight:bold;text-transform:uppercase;}
   .brand-title{font-size:24px;font-weight:bold;margin:2px 0 0;}
@@ -34,14 +34,14 @@
   .today-badge .lbl{font-size:10px;letter-spacing:1px;color:var(--ink-soft);text-transform:uppercase;}
   .today-badge .val{font-size:18px;font-weight:bold;color:var(--accent-dark);}
   .subtabs{display:flex;gap:8px;margin-bottom:16px;max-width:560px;}
-  .pillrow{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;}
+  .pillrow{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;}
   .pill{flex:1;min-width:100px;text-align:center;padding:10px 8px;border-radius:999px;border:1px solid var(--border);background:var(--card);cursor:pointer;font-size:13px;font-family:inherit;color:var(--ink);}
   .pill.active{background:var(--accent-dark);border-color:var(--accent-dark);color:#fff;font-weight:bold;}
   .pill:disabled{opacity:0.4;cursor:not-allowed;}
-  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px;margin-bottom:14px;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px;margin-bottom:12px;}
   .card h3{margin:0 0 4px;font-size:16px;}
   .card .sub{font-size:12px;color:var(--ink-soft);margin:0 0 12px;}
-  .row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);font-size:14px;}
+  .row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border);font-size:14px;}
   .row:last-child{border-bottom:none;}
   .row .rowlabel{color:var(--ink-soft);}
   .row .rowval{font-weight:bold;}
@@ -86,6 +86,10 @@
   .mini .lbl{font-size:10.5px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:0.5px;}
   .mini .val{font-size:16px;font-weight:bold;color:var(--accent-dark);}
   .banner{background:var(--accent-soft);border-radius:10px;padding:10px 12px;font-size:12px;color:var(--accent-dark);margin-bottom:12px;}
+  .chip{border-radius:8px;padding:5px 10px;font-size:12px;margin-bottom:4px;}
+  .itemlist-scroll{max-height:260px;overflow-y:auto;margin-bottom:4px;}
+  .linklike{color:var(--green);font-size:12.5px;font-weight:bold;text-decoration:underline;cursor:pointer;background:none;border:none;padding:0;font-family:inherit;}
+  .compactrow{font-size:13px;padding:3px 0;}
 </style>
 </head>
 <body>
@@ -150,7 +154,7 @@ function freshDay(){
 function freshModeState(){
   return {cart:{}, promo:0, payment:"cash", subtab:"sell", day:freshDay(), lastTxn:null, lastVoidReason:null,
     openingDone:false, manualCount:false, marketName:"", denoms:{}, closeDenoms:{}, freeRedemption:null,
-    tillStatus:"closed", openedAt:null, closedAt:null};
+    tillStatus:"closed", openedAt:null, closedAt:null, orderConfirmed:false};
 }
 
 const STORE_PIN = "1234";
@@ -240,13 +244,15 @@ function changeQty(mode, key, delta){
 }
 function setPromo(mode, val){ state[mode].promo = val; render(); }
 function setPayment(mode, val){ state[mode].payment = val; render(); }
-function clearOrder(mode){ state[mode].cart = {}; state[mode].promo = 0; state[mode].freeRedemption = null; render(); }
+function clearOrder(mode){ state[mode].cart = {}; state[mode].promo = 0; state[mode].freeRedemption = null; state[mode].orderConfirmed = false; render(); }
 function toggleFreeRedemption(mode, key){
   const s = state[mode];
   if(s.freeRedemption === key){ s.freeRedemption = null; }
   else if(!s.freeRedemption && (s.cart[key]||0) > 0){ s.freeRedemption = key; }
   render();
 }
+function confirmOrder(mode){ state[mode].orderConfirmed = true; render(); }
+function editOrder(mode){ state[mode].orderConfirmed = false; render(); }
 
 function completeSale(mode){
   const s = state[mode];
@@ -265,7 +271,7 @@ function completeSale(mode){
   s.lastTxn = {total:c.total, payment:s.payment, items:c.totalQty, promo:s.promo, freeCredit:c.freeCredit,
     preTax:(c.bagelAfterD+c.otherAfterD), hst:c.hst, isD10:s.promo===10, isD20:s.promo===20, discountAmt:c.discountAmt,
     comboPairs:c.comboPairs, comboDiscount:c.comboDiscount};
-  s.cart = {}; s.promo = 0; s.freeRedemption = null;
+  s.cart = {}; s.promo = 0; s.freeRedemption = null; s.orderConfirmed = false;
   render();
 }
 function voidLastSale(mode){
@@ -306,7 +312,7 @@ function closeStoreDay(){
   const s = state.store;
   s.tillStatus = "closed";
   s.closedAt = Date.now();
-  s.cart = {}; s.promo = 0; s.freeRedemption = null;
+  s.cart = {}; s.promo = 0; s.freeRedemption = null; s.orderConfirmed = false;
   render();
 }
 function startNewStoreDay(){
@@ -340,25 +346,35 @@ function renderProductCard(mode, item){
   </div>`;
 }
 
-function renderItemizedCart(mode){
+function renderItemizedCart(mode, compact){
   const s = state[mode];
   const keys = Object.keys(s.cart).filter(k => s.cart[k] > 0);
   if(keys.length === 0) return `<p class="note" style="margin:0;">No items yet.</p>`;
-  return keys.map(key=>{
+  if(compact){
+    const rows = keys.map(key=>{
+      const qty = s.cart[key];
+      const item = findItem(key);
+      const isFree = key === s.freeRedemption;
+      return `<div class="compactrow">${qty}x ${item.name}${isFree?' <b style="color:var(--green);">(FREE)</b>':''}</div>`;
+    }).join("");
+    return `<div style="max-height:84px;overflow-y:auto;">${rows}</div>`;
+  }
+  const rows = keys.map(key=>{
     const qty = s.cart[key];
     const item = findItem(key);
     const isFree = key === s.freeRedemption;
     const eligible = item.promo === true;
-    let control = "";
+    let linkLabel = "";
     if(eligible){
-      if(isFree) control = `<a onclick="toggleFreeRedemption('${mode}','${key}')" style="color:var(--danger);">Undo free</a>`;
-      else if(!s.freeRedemption) control = `<a onclick="toggleFreeRedemption('${mode}','${key}')" style="color:var(--green);">Redeem loyalty card, mark 1 free</a>`;
+      if(isFree) linkLabel = "Undo free";
+      else if(!s.freeRedemption) linkLabel = "Redeem loyalty card, mark 1 free";
     }
     return `<div class="row" style="align-items:flex-start;">
-      <span class="rowlabel">${item.name} <span style="color:var(--ink-soft);">x${qty}</span>${isFree?' <b style="color:var(--green);">(1 FREE)</b>':''}${control?`<br><a style="font-size:11.5px;font-weight:bold;text-decoration:underline;cursor:pointer;" onclick="toggleFreeRedemption('${mode}','${key}')">${control.replace(/<a[^>]*>|<\/a>/g,"")}</a>`:""}</span>
+      <span class="rowlabel">${item.name} <span style="color:var(--ink-soft);">x${qty}</span>${isFree?' <b style="color:var(--green);">(1 FREE)</b>':''}${linkLabel?`<br><a class="linklike" style="color:${isFree?'var(--danger)':'var(--green)'};" onclick="toggleFreeRedemption('${mode}','${key}')">${linkLabel}</a>`:""}</span>
       <span class="rowval">${fmt(item.price)} ea</span>
     </div>`;
   }).join("");
+  return `<div class="itemlist-scroll">${rows}</div>`;
 }
 function renderSell(mode){
   const s = state[mode];
@@ -383,6 +399,57 @@ function renderSell(mode){
       <a onclick="voidLastSale('${mode}')">Void this sale</a>
     </div>` : "";
   const voidNote = (!s.lastTxn && s.lastVoidReason) ? `<div class="note">Last sale voided. Reason: ${s.lastVoidReason}</div>` : "";
+
+  let sideContent;
+  if(c.totalQty===0){
+    sideContent = `<div class="card"><h3>Items in this order</h3><p class="note" style="margin:0;">No items yet. Tap products to add them.</p></div>`;
+  } else if(!s.orderConfirmed){
+    sideContent = `
+      <div class="card">
+        <h3>Items in this order</h3>
+        <p class="sub">Customer hands in a completed loyalty card (12 stamps)? Tap "Redeem" next to the bagel they're claiming free.</p>
+        ${renderItemizedCart(mode, false)}
+        <div class="row" style="border-top:1px solid var(--border);margin-top:4px;padding-top:10px;"><span class="rowlabel">Items</span><span class="rowval">${c.totalQty}</span></div>
+        <button class="btn" onclick="confirmOrder('${mode}')">Review order</button>
+      </div>
+    `;
+  } else {
+    const chips = [];
+    if(c.bagelQty>0) chips.push(`<div class="chip" style="background:var(--green-soft);color:#3F5620;">${c.bagelQty} bagel${c.bagelQty===1?"":"s"}${c.taxExempt?", tax exempt":""}</div>`);
+    if(c.okQty>0) chips.push(`<div class="chip" style="background:var(--accent-soft);color:#7A4416;">${c.okQty} Old Kennedy drink${c.okQty===1?"":"s"}${c.okPrice!==null?` at ${fmt(c.okPrice)} ea`:""}</div>`);
+    if(c.comboPairs>0) chips.push(`<div class="chip" style="background:#F0E4F7;color:#5B3B6E;">${c.comboPairs} combo pair${c.comboPairs===1?"":"s"}, ${fmt(c.comboDiscount)} off</div>`);
+    sideContent = `
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;">
+          <h3 style="margin:0;">Order summary</h3>
+          <a class="linklike" onclick="editOrder('${mode}')">Edit items</a>
+        </div>
+        <div style="margin:8px 0;">${renderItemizedCart(mode, true)}</div>
+        ${chips.length ? `<div style="margin-bottom:8px;">${chips.join("")}</div>` : ""}
+        <p class="sub" style="margin:6px 0 4px;">Discount</p>
+        <div class="pillrow">
+          <button class="pill ${s.promo===0?'active':''}" onclick="setPromo('${mode}',0)">No discount</button>
+          <button class="pill ${s.promo===10?'active':''}" onclick="setPromo('${mode}',10)">10% off</button>
+          <button class="pill ${s.promo===20?'active':''}" onclick="setPromo('${mode}',20)">20% off</button>
+        </div>
+        <div class="row"><span class="rowlabel">Subtotal</span><span class="rowval">${fmt(c.subtotal)}</span></div>
+        ${c.freeCredit>0?`<div class="row"><span class="rowlabel">Loyalty card credit${c.freeItemName?` (${c.freeItemName})`:""}</span><span class="rowval">-${fmt(c.freeCredit)}</span></div>`:""}
+        ${c.comboDiscount>0?`<div class="row"><span class="rowlabel">Combo discount</span><span class="rowval">-${fmt(c.comboDiscount)}</span></div>`:""}
+        <div class="row"><span class="rowlabel">Discount (${s.promo}%)</span><span class="rowval">-${fmt(c.discountAmt)}</span></div>
+        <div class="row"><span class="rowlabel">HST</span><span class="rowval">${fmt(c.hst)}</span></div>
+        <div class="row"><span class="rowlabel">Total due</span><span class="rowval">${fmt(c.total)}</span></div>
+        <p class="sub" style="margin:6px 0 4px;">Payment method</p>
+        <div class="pillrow">
+          <button class="pill ${s.payment==='cash'?'active':''}" onclick="setPayment('${mode}','cash')">Cash</button>
+          <button class="pill ${s.payment==='emt'?'active':''}" onclick="setPayment('${mode}','emt')">EMT</button>
+          <button class="pill ${s.payment==='square'?'active':''}" onclick="setPayment('${mode}','square')">Square</button>
+        </div>
+        <button class="btn" onclick="completeSale('${mode}')">Complete sale: ${fmt(c.total)}</button>
+        <a class="linklike" style="display:block;text-align:center;margin-top:8px;color:var(--danger);" onclick="clearOrder('${mode}')">Clear order</a>
+      </div>
+    `;
+  }
+
   return `
     <div class="split">
       <div class="split-main">
@@ -393,46 +460,7 @@ function renderSell(mode){
       <div class="split-side">
         ${txnStrip}
         ${voidNote}
-        <div class="card">
-          <h3>Items in this order</h3>
-          <p class="sub">Customer hands in a completed loyalty card (12 stamps)? Tap "Redeem" next to the bagel they're claiming free.</p>
-          ${renderItemizedCart(mode)}
-        </div>
-        <div class="card">
-          <h3>Order summary</h3>
-          <div class="promoinfo">
-            <b>Bagels in this order: ${c.bagelQty}</b><br>
-            Tax exempt on bagels at 6+: ${c.taxExempt?"<b>active</b> (HST waived on bagel items)":"not yet (need "+(6-c.bagelQty>0?6-c.bagelQty:0)+" more)"}
-          </div>
-          <div class="promoinfo" style="background:var(--accent-soft);color:#7A4416;">
-            <b>Old Kennedy drinks in this order: ${c.okQty}</b>${c.comboPairs>0?` (${c.comboPairs} in a combo pair)`:""}<br>
-            Non-combo drinks: ${c.remainingOkQty} at ${fmt(c.okPrice!==null?c.okPrice:7)} each${c.okPrice!==null?" (bulk price active)":" (2+ is $6.00, 4+ is $5.50)"}
-          </div>
-          <div class="promoinfo" style="background:#F0E4F7;color:#5B3B6E;">
-            <b>Combo pairs (sandwich + Old Kennedy drink): ${c.comboPairs}</b><br>
-            ${c.comboPairs>0?`$2 off x ${c.comboPairs} = ${fmt(c.comboDiscount)} off`:"Add a sandwich and an Old Kennedy drink to unlock $2 off each pair"}
-          </div>
-          <div class="row"><span class="rowlabel">Discount</span></div>
-          <div class="pillrow">
-            <button class="pill ${s.promo===0?'active':''}" onclick="setPromo('${mode}',0)">No discount</button>
-            <button class="pill ${s.promo===10?'active':''}" onclick="setPromo('${mode}',10)">10% off</button>
-            <button class="pill ${s.promo===20?'active':''}" onclick="setPromo('${mode}',20)">20% off</button>
-          </div>
-          <div class="row"><span class="rowlabel">Subtotal</span><span class="rowval">${fmt(c.subtotal)}</span></div>
-          <div class="row"><span class="rowlabel">Loyalty card credit${c.freeItemName?` (${c.freeItemName})`:""}</span><span class="rowval">-${fmt(c.freeCredit)}</span></div>
-          <div class="row"><span class="rowlabel">Combo discount</span><span class="rowval">-${fmt(c.comboDiscount)}</span></div>
-          <div class="row"><span class="rowlabel">Discount (${s.promo}%)</span><span class="rowval">-${fmt(c.discountAmt)}</span></div>
-          <div class="row"><span class="rowlabel">HST</span><span class="rowval">${fmt(c.hst)}</span></div>
-          <div class="row"><span class="rowlabel">Total due</span><span class="rowval">${fmt(c.total)}</span></div>
-          <div class="row"><span class="rowlabel">Payment method</span></div>
-          <div class="pillrow">
-            <button class="pill ${s.payment==='cash'?'active':''}" onclick="setPayment('${mode}','cash')">Cash</button>
-            <button class="pill ${s.payment==='emt'?'active':''}" onclick="setPayment('${mode}','emt')">EMT</button>
-            <button class="pill ${s.payment==='square'?'active':''}" onclick="setPayment('${mode}','square')">Square</button>
-          </div>
-          <button class="btn" ${c.totalQty===0?"disabled":""} onclick="completeSale('${mode}')">Complete sale: ${fmt(c.total)}</button>
-          <button class="btn secondary" ${c.totalQty===0?"disabled":""} onclick="clearOrder('${mode}')">Clear order</button>
-        </div>
+        ${sideContent}
       </div>
     </div>
   `;
