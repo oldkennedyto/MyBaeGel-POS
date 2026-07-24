@@ -78,6 +78,10 @@
   .sheet-handle{width:40px;height:4px;background:var(--border);border-radius:2px;margin:0 auto 12px;}
   .sheet h3{margin:0;font-size:15.5px;}
   .chip{border-radius:8px;padding:5px 10px;font-size:11.5px;margin-bottom:4px;display:inline-block;margin-right:4px;}
+  .chip-expand{cursor:pointer;display:block;}
+  .chip-head{display:flex;justify-content:space-between;align-items:center;font-weight:bold;gap:8px;}
+  .chip-detail{margin-top:6px;padding-top:6px;border-top:1px solid rgba(0,0,0,0.12);}
+  .chip-detail-row{display:flex;justify-content:space-between;font-size:10.5px;font-weight:normal;padding:2px 0;gap:8px;}
   .itemlist-scroll{max-height:170px;overflow-y:auto;margin-bottom:4px;}
   .compactrow{font-size:13px;padding:3px 0;}
   .linklike{color:var(--green);font-size:12.5px;font-weight:bold;text-decoration:underline;cursor:pointer;background:none;border:none;padding:0;font-family:inherit;}
@@ -159,7 +163,7 @@ function freshDay(){
 function freshModeState(){
   return {cart:{}, promo:0, payment:"cash", subtab:"sell", day:freshDay(), lastTxn:null, lastVoidReason:null,
     openingDone:false, manualCount:false, marketName:"", denoms:{}, closeDenoms:{}, freeRedemption:null,
-    tillStatus:"closed", openedAt:null, closedAt:null, orderConfirmed:false, openingPrompt:null};
+    tillStatus:"closed", openedAt:null, closedAt:null, orderConfirmed:false, openingPrompt:null, expandedChip:null};
 }
 
 const state = {
@@ -232,25 +236,26 @@ function computeCart(mode){
     const freeItem = findItem(s.freeRedemption);
     if(freeItem && (s.cart[s.freeRedemption]||0) > 0){ freeCredit = freeItem.price; freeItemName = freeItem.name; }
   }
+  const itemLines = [];
   Object.keys(s.cart).forEach(key=>{
     const qty = s.cart[key]; if(!qty) return;
     const item = findItem(key);
-    let line;
+    let line, comboQty=0, bulkQty=0, bulkUnitPrice=null;
     if(item.okTier){
-      let comboForItem = 0;
       if(okComboAllocated < comboPairs){
-        comboForItem = Math.min(qty, comboPairs - okComboAllocated);
-        okComboAllocated += comboForItem;
+        comboQty = Math.min(qty, comboPairs - okComboAllocated);
+        okComboAllocated += comboQty;
       }
-      const bulkForItem = qty - comboForItem;
-      const bulkUnitPrice = okPrice!==null ? okPrice : item.price;
-      line = comboForItem*item.price + bulkForItem*bulkUnitPrice;
+      bulkQty = qty - comboQty;
+      bulkUnitPrice = okPrice!==null ? okPrice : item.price;
+      line = comboQty*item.price + bulkQty*bulkUnitPrice;
     } else {
       line = item.price*qty;
     }
     subtotal += line; totalQty += qty;
     if(item.promo){ bagelSub += line; bagelQty += qty; }
     else { otherSub += line; }
+    itemLines.push({key, name:item.name, qty, price:item.price, line, isPromo:!!item.promo, isOkTier:!!item.okTier, isFree:key===s.freeRedemption, comboQty, bulkQty, bulkUnitPrice});
   });
   const bagelEff = Math.max(0, bagelSub - freeCredit);
   const otherEff = Math.max(0, otherSub - comboDiscount);
@@ -263,7 +268,7 @@ function computeCart(mode){
   const total = bagelAfterD+otherAfterD+hst;
   const discountAmt = (bagelSub-freeCredit+otherEff) - (bagelAfterD+otherAfterD);
   return {subtotal, bagelSub, otherSub, bagelQty, totalQty, freeCredit, freeItemName, bagelAfterD, otherAfterD, taxExempt, hst, total, discountAmt, discountPct,
-    okQty, okPrice, sandwichQty, comboPairs, comboDiscount, remainingOkQty};
+    okQty, okPrice, sandwichQty, comboPairs, comboDiscount, remainingOkQty, itemLines};
 }
 function findItem(key){
   for(const cat of Object.values(MENU)){ const found = cat.items.find(i=>i.key===key); if(found) return found; }
@@ -285,6 +290,11 @@ function toggleFreeRedemption(mode, key){
   const s = state[mode];
   if(s.freeRedemption === key){ s.freeRedemption = null; }
   else if(!s.freeRedemption && (s.cart[key]||0) > 0){ s.freeRedemption = key; }
+  render();
+}
+function toggleChipDetail(mode, which){
+  const s = state[mode];
+  s.expandedChip = s.expandedChip===which ? null : which;
   render();
 }
 function confirmOrder(mode){ state[mode].orderConfirmed = true; render(); }
@@ -445,8 +455,28 @@ function renderReviewSheet(){
   if(s.subtab!=="sell" || !s.orderConfirmed) return "";
   const c = computeCart('market');
   const chips = [];
-  if(c.bagelQty>0) chips.push(`<span class="chip" style="background:var(--green-soft);color:#3F5620;">${c.bagelQty} bagel${c.bagelQty===1?"":"s"}${c.taxExempt?", tax exempt":""}</span>`);
-  if(c.okQty>0) chips.push(`<span class="chip" style="background:var(--accent-soft);color:#7A4416;">${c.okQty} Old Kennedy drink${c.okQty===1?"":"s"}${c.okPrice!==null?` at ${fmt(c.okPrice)} ea`:""}</span>`);
+  if(c.bagelQty>0){
+    const bagelOpen = s.expandedChip==="bagel";
+    const bagelRows = c.itemLines.filter(l=>l.isPromo).map(l=>`<div class="chip-detail-row"><span>${l.qty}x ${l.name}${l.isFree?' <b>(1 FREE)</b>':''}</span><span>${fmt(l.line)}</span></div>`).join("");
+    chips.push(`<div class="chip chip-expand" style="background:var(--green-soft);color:#3F5620;" onclick="toggleChipDetail('market','bagel')">
+      <div class="chip-head"><span>${c.bagelQty} bagel${c.bagelQty===1?"":"s"}${c.taxExempt?", tax exempt":""}</span><span>${fmt(c.bagelSub)} ${bagelOpen?"&#9662;":"&#9656;"}</span></div>
+      ${bagelOpen?`<div class="chip-detail">${bagelRows}</div>`:""}
+    </div>`);
+  }
+  if(c.okQty>0){
+    const okOpen = s.expandedChip==="ok";
+    const okRows = c.itemLines.filter(l=>l.isOkTier).map(l=>{
+      let note;
+      if(l.comboQty>0 && l.bulkQty>0) note = `${l.comboQty} @ ${fmt(l.price)} (combo) + ${l.bulkQty} @ ${fmt(l.bulkUnitPrice)}`;
+      else if(l.comboQty>0) note = `@ ${fmt(l.price)} each (combo pair)`;
+      else note = l.bulkUnitPrice < l.price ? `@ ${fmt(l.bulkUnitPrice)} each (bulk tier)` : `@ ${fmt(l.price)} each`;
+      return `<div class="chip-detail-row" style="flex-direction:column;align-items:flex-start;"><div style="display:flex;justify-content:space-between;width:100%;"><span>${l.qty}x ${l.name}</span><span>${fmt(l.line)}</span></div><span style="font-size:10px;opacity:0.75;">${note}</span></div>`;
+    }).join("");
+    chips.push(`<div class="chip chip-expand" style="background:var(--accent-soft);color:#7A4416;" onclick="toggleChipDetail('market','ok')">
+      <div class="chip-head"><span>${c.okQty} Old Kennedy drink${c.okQty===1?"":"s"}</span><span>${fmt(c.itemLines.filter(l=>l.isOkTier).reduce((a,l)=>a+l.line,0))} ${okOpen?"&#9662;":"&#9656;"}</span></div>
+      ${okOpen?`<div class="chip-detail">${okRows}</div>`:""}
+    </div>`);
+  }
   if(c.comboPairs>0) chips.push(`<span class="chip" style="background:#F0E4F7;color:#5B3B6E;">${c.comboPairs} combo pair${c.comboPairs===1?"":"s"}, ${fmt(c.comboDiscount)} off</span>`);
   return `
     <div class="sheet-overlay">
