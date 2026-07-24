@@ -149,18 +149,21 @@ function freshDay(){
 }
 function freshModeState(){
   return {cart:{}, promo:0, payment:"cash", subtab:"sell", day:freshDay(), lastTxn:null, lastVoidReason:null,
-    openingDone:false, manualCount:false, marketName:"", denoms:{}, closeDenoms:{}, freeRedemption:null};
+    openingDone:false, manualCount:false, marketName:"", denoms:{}, closeDenoms:{}, freeRedemption:null,
+    tillStatus:"closed", openedAt:null, closedAt:null};
 }
 
+const STORE_PIN = "1234";
 const state = {
   activeMode:"store",
-  store: Object.assign(freshModeState(), {openingDone:true, subtab:"sell"}),
+  store: Object.assign(freshModeState(), {openingDone:true, subtab:"sell", tillStatus:"open", openedAt:Date.now()}),
   market: Object.assign(freshModeState(), {subtab:"opening"}),
   activeCat:"plain",
 };
 
 function ms(mode){ return mode==="dashboard" ? null : state[mode]; }
 function fmt(n){ return "$" + (Math.round(n*100)/100).toFixed(2); }
+function fmtTime(ts){ return ts ? new Date(ts).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"}) : ""; }
 
 function okTierPrice(okQty){
   if(okQty>=4) return 5.5;
@@ -295,7 +298,29 @@ function setCloseDenom(mode, key, val){ state[mode].closeDenoms[key] = parseFloa
 function denomTotal(obj){ return DENOMS.reduce((sum,d)=> sum + (obj[d.key]||0)*d.val, 0); }
 
 function closeTill(mode){
-  state[mode] = Object.assign(freshModeState(), mode==="store" ? {openingDone:true, subtab:"sell"} : {subtab:"opening"});
+  if(mode==="store"){ closeStoreDay(); return; }
+  state[mode] = Object.assign(freshModeState(), {subtab:"opening"});
+  render();
+}
+function closeStoreDay(){
+  const s = state.store;
+  s.tillStatus = "closed";
+  s.closedAt = Date.now();
+  s.cart = {}; s.promo = 0; s.freeRedemption = null;
+  render();
+}
+function startNewStoreDay(){
+  state.store = Object.assign(freshModeState(), {openingDone:true, subtab:"sell", tillStatus:"open", openedAt:Date.now()});
+  render();
+}
+function reopenStoreTill(){
+  const pin = window.prompt("Enter manager PIN to reopen today's till:");
+  if(pin === null) return;
+  if(pin !== STORE_PIN){ window.alert("Incorrect PIN."); return; }
+  const s = state.store;
+  s.tillStatus = "open";
+  s.closedAt = null;
+  s.subtab = "sell";
   render();
 }
 
@@ -337,6 +362,16 @@ function renderItemizedCart(mode){
 }
 function renderSell(mode){
   const s = state[mode];
+  if(mode==="store" && s.tillStatus==="closed"){
+    return `
+      <div class="card">
+        <h3>Till is closed</h3>
+        <div class="match off">Till is CLOSED, closed at ${fmtTime(s.closedAt)}</div>
+        <p class="sub" style="margin-top:12px;">Start a new day from Opening Till to continue selling.</p>
+        <button class="btn" onclick="setSubtab('store','opening')">Go to Opening Till</button>
+      </div>
+    `;
+  }
   const c = computeCart(mode);
   const catBtns = CATS.map(k=>`<button class="${state.activeCat===k?'active':''}" onclick="setCat('${k}')">${catLabel(k)}</button>`).join("");
   const prods = catItems(state.activeCat).map(i=>renderProductCard(mode,i)).join("");
@@ -422,11 +457,26 @@ function renderOpening(mode){
       </div>
     `;
   }
+  const isOpen = s.tillStatus==="open";
+  const statusBadge = isOpen
+    ? `<div class="match ok">Till is OPEN, since ${fmtTime(s.openedAt)}</div>`
+    : `<div class="match off">Till is CLOSED, closed at ${fmtTime(s.closedAt)}${s.openedAt?` (opened at ${fmtTime(s.openedAt)})`:""}</div>`;
+  if(!isOpen){
+    return `
+      <div class="card">
+        <h3>Opening till</h3>
+        ${statusBadge}
+        <p class="sub" style="margin-top:12px;">Today's till is closed. Start a new day to open it again and continue selling.</p>
+        <button class="btn" onclick="startNewStoreDay()">Start new day</button>
+        <button class="btn secondary" onclick="reopenStoreTill()">Reopen today's till (manager override)</button>
+      </div>
+    `;
+  }
   return `
-    <div class="banner">Store mode starts automatically each day; no manual cash count needed since Ivy is the sole operator. Toggle below if a manual count is preferred instead.</div>
     <div class="card">
       <h3>Opening till</h3>
-      <div class="checkline"><input type="checkbox" ${s.manualCount?"checked":""} onchange="toggleManualCount('store')"> I'd like to manually count the opening float instead</div>
+      ${statusBadge}
+      <div class="checkline" style="margin-top:12px;"><input type="checkbox" ${s.manualCount?"checked":""} onchange="toggleManualCount('store')"> I'd like to manually count the opening float instead</div>
       ${s.manualCount ? `<div class="denomgrid">${DENOMS.map(d=>`<div class="drow"><div><div class="dname">${d.label}</div><div class="dsub">x ${d.val<1?d.val.toFixed(2):"$"+d.val} each</div></div><input type="number" min="0" value="${s.denoms[d.key]||0}" onchange="setDenom('store','${d.key}',this.value)"></div>`).join("")}
       <div class="row"><span class="rowlabel">Counted total</span><span class="rowval">${fmt(denomTotal(s.denoms))}</span></div>` : `<p class="note">No count needed. The day is already open for selling.</p>`}
       <button class="btn secondary" onclick="setSubtab('store','sell')">Go to sell</button>
@@ -457,7 +507,17 @@ function renderClosing(mode){
     </div>
   `;
   let cashSection;
-  if(mode==="market" || s.manualCount){
+  const storeClosed = mode==="store" && s.tillStatus==="closed";
+  if(storeClosed){
+    cashSection = `
+      <div class="card">
+        <h3>Closing till</h3>
+        <div class="match off">Till is CLOSED, closed at ${fmtTime(s.closedAt)}</div>
+        <p class="sub" style="margin-top:12px;">These are today's final numbers. Start a new day from Opening Till when ready, or use the manager override to make a correction to today.</p>
+        <button class="btn secondary" onclick="reopenStoreTill()">Reopen today's till (manager override)</button>
+      </div>
+    `;
+  } else if(mode==="market" || s.manualCount){
     const closeRows = DENOMS.map(d=>`<div class="drow"><div><div class="dname">${d.label}</div><div class="dsub">x ${d.val<1?d.val.toFixed(2):"$"+d.val} each</div></div><input type="number" min="0" value="${s.closeDenoms[d.key]||0}" onchange="setCloseDenom('${mode}','${d.key}',this.value)"></div>`).join("");
     const counted = denomTotal(s.closeDenoms);
     const matches = Math.abs(counted-expected) < 0.01;
@@ -526,11 +586,14 @@ function render(){
   } else {
     const mode = state.activeMode;
     const s = state[mode];
-    const subtabsDisabled = mode==="market" && !s.openingDone;
+    const marketLocked = false; // unlocked for review with My Baegel
+    const storeLocked = mode==="store" && s.tillStatus==="closed";
+    const sellDisabled = marketLocked || storeLocked;
+    const closingDisabled = marketLocked;
     body += `<div class="subtabs">
       <button class="pill ${s.subtab==='opening'?'active':''}" onclick="setSubtab('${mode}','opening')">Opening till</button>
-      <button class="pill ${s.subtab==='sell'?'active':''}" ${subtabsDisabled?"disabled":""} onclick="setSubtab('${mode}','sell')">Sell</button>
-      <button class="pill ${s.subtab==='closing'?'active':''}" ${subtabsDisabled?"disabled":""} onclick="setSubtab('${mode}','closing')">Closing till</button>
+      <button class="pill ${s.subtab==='sell'?'active':''}" ${sellDisabled?"disabled":""} onclick="setSubtab('${mode}','sell')">Sell</button>
+      <button class="pill ${s.subtab==='closing'?'active':''}" ${closingDisabled?"disabled":""} onclick="setSubtab('${mode}','closing')">Closing till</button>
     </div>`;
     if(s.subtab==="opening") body += renderOpening(mode);
     else if(s.subtab==="sell") body += renderSell(mode);
