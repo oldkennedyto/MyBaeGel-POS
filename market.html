@@ -156,6 +156,51 @@ const DENOMS = [
   {key:"0.10", label:"Dimes (10c)", val:0.10}, {key:"0.05", label:"Nickels (5c)", val:0.05},
 ];
 
+// ===== Stage 4: Apps Script backend =====
+// Paste your deployed Web App URL here once it exists (see Stage4_AppsScript_Setup.md).
+// Until then BACKEND_ENABLED stays false and everything works exactly like the
+// Stage 2 mockup: in-memory only, no network calls attempted.
+const BACKEND_URL = "https://script.google.com/macros/s/AKfycbz5sZ_ncltTt4lhhocwajymP9CXf7R9u7ZS_wVtIws05QSsbc8JSDQLnVzzARkr9Esw/exec";
+const APP_KEY = "baegel-2026-key";
+const BACKEND_ENABLED = /^https:\/\//.test(BACKEND_URL);
+
+function todayKey(){
+  const d = new Date();
+  const p = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+}
+async function apiGet(action, params){
+  if(!BACKEND_ENABLED) return {ok:false, error:"backend_not_configured"};
+  const qs = new URLSearchParams(Object.assign({action, key:APP_KEY}, params||{})).toString();
+  try{
+    const res = await fetch(`${BACKEND_URL}?${qs}`);
+    return await res.json();
+  }catch(err){
+    console.warn("apiGet failed", action, err);
+    return {ok:false, error:String(err)};
+  }
+}
+async function apiPost(action, payload){
+  if(!BACKEND_ENABLED) return {ok:false, error:"backend_not_configured"};
+  try{
+    const res = await fetch(BACKEND_URL, {
+      method:"POST",
+      headers:{"Content-Type":"text/plain;charset=utf-8"}, // avoids a CORS preflight Apps Script can't answer
+      body: JSON.stringify(Object.assign({action, key:APP_KEY}, payload||{})),
+    });
+    return await res.json();
+  }catch(err){
+    console.warn("apiPost failed", action, err);
+    return {ok:false, error:String(err)};
+  }
+}
+async function hydrateMarket(){
+  const res = await apiGet("getState", {mode:"market", date:todayKey()});
+  if(!res || !res.ok) return;
+  if(res.today) state.market.day = Object.assign(freshDay(), res.today);
+  render();
+}
+
 function freshDay(){
   return {items:0, preTax:0, hst:0, revenue:0, cash:0, emt:0, square:0,
     d10:{count:0, amt:0}, d20:{count:0, amt:0}, combo:{count:0, amt:0}, freeItems:0, freeAmt:0, voidCount:0, voidAmt:0};
@@ -176,6 +221,7 @@ function chooseDevice(mode){
   if(mode==="store"){ window.location.href = "index.html"; return; }
   deviceChosen = true;
   render();
+  hydrateMarket();
 }
 function confirmSwitchDevice(target){
   const s = state.market;
@@ -304,6 +350,14 @@ function completeSale(mode){
   const s = state[mode];
   const c = computeCart(mode);
   if(c.totalQty===0) return;
+  const itemsSummary = Object.keys(s.cart).filter(k=>s.cart[k]>0).map(k=>`${s.cart[k]}x ${findItem(k).name}`).join(", ");
+  const saleRecord = {
+    mode, marketName: state.market.marketName,
+    date: todayKey(), timestamp: new Date().toISOString(),
+    items: itemsSummary, paymentMethod: s.payment,
+    subtotal: c.subtotal, loyaltyCredit: c.freeCredit, comboDiscount: c.comboDiscount,
+    discountPct: s.promo, discountAmount: c.discountAmt, hst: c.hst, total: c.total, taxExempt: c.taxExempt,
+  };
   const day = s.day;
   day.items += c.totalQty;
   day.preTax += (c.bagelAfterD+c.otherAfterD);
@@ -319,6 +373,7 @@ function completeSale(mode){
     comboPairs:c.comboPairs, comboDiscount:c.comboDiscount};
   s.cart = {}; s.promo = 0; s.freeRedemption = null; s.orderConfirmed = false;
   render();
+  apiPost("recordSale", saleRecord);
 }
 function voidLastSale(mode){
   const s = state[mode]; const t = s.lastTxn; if(!t) return;
@@ -335,6 +390,7 @@ function voidLastSale(mode){
   s.lastVoidReason = reason || "(no reason given)";
   s.lastTxn = null;
   render();
+  apiPost("voidSale", {mode, date:todayKey(), reason});
 }
 
 function setMarketName(val){ state.market.marketName = val; render(); }
@@ -343,11 +399,28 @@ function saveOpening(mode){
   s.openingDone = true;
   s.subtab = "sell";
   render();
+  apiPost("openTill", {mode:"market", date:todayKey(), manualCount:true,
+    openingFloat: denomTotal(s.denoms), marketName: s.marketName});
 }
 function setDenom(mode, key, val){ state[mode].denoms[key] = parseFloat(val)||0; render(); }
 function setCloseDenom(mode, key, val){ state[mode].closeDenoms[key] = parseFloat(val)||0; render(); }
 function denomTotal(obj){ return DENOMS.reduce((sum,d)=> sum + (obj[d.key]||0)*d.val, 0); }
 function closeMarketDay(){
+  const s = state.market;
+  const openingTotal = denomTotal(s.denoms);
+  const closingCount = denomTotal(s.closeDenoms);
+  const expected = openingTotal + s.day.cash;
+  const day = s.day;
+  apiPost("closeTill", {
+    mode:"market", date:todayKey(), timestamp:new Date().toISOString(), marketName:s.marketName,
+    openingFloat:openingTotal, closingCount, expectedCash:expected,
+    match: Math.abs(closingCount-expected)<0.01,
+    daily: {items:day.items, preTax:day.preTax, hst:day.hst, revenue:day.revenue,
+      cash:day.cash, emt:day.emt, square:day.square,
+      d10Count:day.d10.count, d10Amt:day.d10.amt, d20Count:day.d20.count, d20Amt:day.d20.amt,
+      comboCount:day.combo.count, comboAmt:day.combo.amt,
+      loyaltyCount:day.freeItems, loyaltyAmt:day.freeAmt, voidCount:day.voidCount, voidAmt:day.voidAmt},
+  });
   state.market = Object.assign(freshModeState(), {subtab:"opening"});
   render();
 }

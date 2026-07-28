@@ -172,6 +172,64 @@ const DENOMS = [
   {key:"0.10", label:"Dimes (10c)", val:0.10}, {key:"0.05", label:"Nickels (5c)", val:0.05},
 ];
 
+// ===== Stage 4: Apps Script backend =====
+// Paste your deployed Web App URL here once it exists (see Stage4_AppsScript_Setup.md).
+// Until then BACKEND_ENABLED stays false and everything works exactly like the
+// Stage 2 mockup: in-memory only, no network calls attempted.
+const BACKEND_URL = "https://script.google.com/macros/s/AKfycbz5sZ_ncltTt4lhhocwajymP9CXf7R9u7ZS_wVtIws05QSsbc8JSDQLnVzzARkr9Esw/exec";
+const APP_KEY = "baegel-2026-key";
+const BACKEND_ENABLED = /^https:\/\//.test(BACKEND_URL);
+
+function todayKey(){
+  const d = new Date();
+  const p = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+}
+async function apiGet(action, params){
+  if(!BACKEND_ENABLED) return {ok:false, error:"backend_not_configured"};
+  const qs = new URLSearchParams(Object.assign({action, key:APP_KEY}, params||{})).toString();
+  try{
+    const res = await fetch(`${BACKEND_URL}?${qs}`);
+    return await res.json();
+  }catch(err){
+    console.warn("apiGet failed", action, err);
+    return {ok:false, error:String(err)};
+  }
+}
+async function apiPost(action, payload){
+  if(!BACKEND_ENABLED) return {ok:false, error:"backend_not_configured"};
+  try{
+    const res = await fetch(BACKEND_URL, {
+      method:"POST",
+      headers:{"Content-Type":"text/plain;charset=utf-8"}, // avoids a CORS preflight Apps Script can't answer
+      body: JSON.stringify(Object.assign({action, key:APP_KEY}, payload||{})),
+    });
+    return await res.json();
+  }catch(err){
+    console.warn("apiPost failed", action, err);
+    return {ok:false, error:String(err)};
+  }
+}
+async function hydrateStore(){
+  const res = await apiGet("getState", {mode:"store", date:todayKey()});
+  if(!res || !res.ok) return;
+  if(res.lastCloseFloat != null) lastStoreFloat = {amt:res.lastCloseFloat, denoms:{}};
+  const s = state.store;
+  if(res.tillStatus==="open"){
+    s.tillStatus = "open";
+    s.openedAt = res.openedAt ? Date.parse(res.openedAt) : Date.now();
+    s.manualCount = !!res.manualCount;
+    s.openingFloatAmt = res.openingFloat!=null ? res.openingFloat : null;
+    s.subtab = "sell";
+  }
+  if(res.today) s.day = Object.assign(freshDay(), res.today);
+  render();
+}
+function openingFloatTotal(mode, s){
+  if(mode==="store" && !s.manualCount) return s.openingFloatAmt || 0;
+  return denomTotal(s.denoms);
+}
+
 function freshDay(){
   return {items:0, preTax:0, hst:0, revenue:0, cash:0, emt:0, square:0,
     d10:{count:0, amt:0}, d20:{count:0, amt:0}, combo:{count:0, amt:0}, freeItems:0, freeAmt:0, voidCount:0, voidAmt:0};
@@ -179,10 +237,14 @@ function freshDay(){
 function freshModeState(){
   return {cart:{}, promo:0, payment:"cash", subtab:"sell", day:freshDay(), lastTxn:null, lastVoidReason:null,
     openingDone:false, manualCount:false, marketName:"", denoms:{}, closeDenoms:{}, freeRedemption:null,
-    tillStatus:"closed", openedAt:null, closedAt:null, orderConfirmed:false, openingPrompt:null, expandedChip:null};
+    tillStatus:"closed", openedAt:null, closedAt:null, orderConfirmed:false, openingPrompt:null, expandedChip:null,
+    openingFloatAmt:null};
 }
 
-const STORE_PIN = "1234";
+// Fallback only: used if BACKEND_URL isn't configured yet. Once the backend is
+// live, the PIN is validated server-side (Script Property STORE_PIN) and this
+// constant is never consulted — see reopenStoreTill().
+const LOCAL_FALLBACK_PIN = "1234";
 let lastStoreFloat = {amt:0, denoms:{}};
 const state = {
   activeMode:"store",
@@ -196,6 +258,7 @@ function chooseDevice(mode){
   if(mode==="market"){ window.location.href = "market.html"; return; }
   deviceChosen = true;
   render();
+  hydrateStore();
 }
 function confirmSwitchDevice(target){
   const s = state.store;
@@ -328,6 +391,14 @@ function completeSale(mode){
   const s = state[mode];
   const c = computeCart(mode);
   if(c.totalQty===0) return;
+  const itemsSummary = Object.keys(s.cart).filter(k=>s.cart[k]>0).map(k=>`${s.cart[k]}x ${findItem(k).name}`).join(", ");
+  const saleRecord = {
+    mode, marketName: mode==="market" ? state.market.marketName : "",
+    date: todayKey(), timestamp: new Date().toISOString(),
+    items: itemsSummary, paymentMethod: s.payment,
+    subtotal: c.subtotal, loyaltyCredit: c.freeCredit, comboDiscount: c.comboDiscount,
+    discountPct: s.promo, discountAmount: c.discountAmt, hst: c.hst, total: c.total, taxExempt: c.taxExempt,
+  };
   const day = s.day;
   day.items += c.totalQty;
   day.preTax += (c.bagelAfterD+c.otherAfterD);
@@ -343,6 +414,7 @@ function completeSale(mode){
     comboPairs:c.comboPairs, comboDiscount:c.comboDiscount};
   s.cart = {}; s.promo = 0; s.freeRedemption = null; s.orderConfirmed = false;
   render();
+  apiPost("recordSale", saleRecord);
 }
 function voidLastSale(mode){
   const s = state[mode]; const t = s.lastTxn; if(!t) return;
@@ -359,6 +431,7 @@ function voidLastSale(mode){
   s.lastVoidReason = reason || "(no reason given)";
   s.lastTxn = null;
   render();
+  apiPost("voidSale", {mode, date:todayKey(), reason});
 }
 
 function setMarketName(val){ state.market.marketName = val; render(); }
@@ -372,30 +445,51 @@ function setDenom(mode, key, val){ state[mode].denoms[key] = parseFloat(val)||0;
 function setCloseDenom(mode, key, val){ state[mode].closeDenoms[key] = parseFloat(val)||0; render(); }
 function denomTotal(obj){ return DENOMS.reduce((sum,d)=> sum + (obj[d.key]||0)*d.val, 0); }
 
-function closeTill(mode){
-  if(mode==="store"){ closeStoreDay(); return; }
-  state[mode] = Object.assign(freshModeState(), {subtab:"opening"});
-  render();
-}
+function closeTill(){ closeStoreDay(); }
 function closeStoreDay(){
   const s = state.store;
+  const openingTotal = openingFloatTotal("store", s);
+  const closingCount = s.manualCount ? denomTotal(s.closeDenoms) : null;
+  const expected = openingTotal + s.day.cash;
   if(s.manualCount){
     lastStoreFloat = {amt: denomTotal(s.closeDenoms), denoms: Object.assign({}, s.closeDenoms)};
   }
   s.tillStatus = "closed";
   s.closedAt = Date.now();
+  const day = s.day;
+  apiPost("closeTill", {
+    mode:"store", date:todayKey(), timestamp:new Date().toISOString(), marketName:"",
+    openingFloat:openingTotal, closingCount, expectedCash:expected,
+    match: closingCount!=null ? Math.abs(closingCount-expected)<0.01 : null,
+    daily: {items:day.items, preTax:day.preTax, hst:day.hst, revenue:day.revenue,
+      cash:day.cash, emt:day.emt, square:day.square,
+      d10Count:day.d10.count, d10Amt:day.d10.amt, d20Count:day.d20.count, d20Amt:day.d20.amt,
+      comboCount:day.combo.count, comboAmt:day.combo.amt,
+      loyaltyCount:day.freeItems, loyaltyAmt:day.freeAmt, voidCount:day.voidCount, voidAmt:day.voidAmt},
+  });
   s.cart = {}; s.promo = 0; s.freeRedemption = null; s.orderConfirmed = false;
   render();
 }
-function startNewStoreDay(denoms, manualCount){
-  state.store = Object.assign(freshModeState(), {subtab:"sell", tillStatus:"open", openedAt:Date.now(), denoms: denoms || {}, manualCount: !!manualCount});
+function startNewStoreDay(denoms, manualCount, openingFloatAmt){
+  state.store = Object.assign(freshModeState(), {subtab:"sell", tillStatus:"open", openedAt:Date.now(),
+    denoms: denoms || {}, manualCount: !!manualCount, openingFloatAmt: openingFloatAmt!=null ? openingFloatAmt : null});
   state.store.openingPrompt = null;
   render();
+  apiPost("openTill", {mode:"store", date:todayKey(), manualCount:!!manualCount,
+    openingFloat: manualCount ? denomTotal(denoms||{}) : (openingFloatAmt||0)});
 }
-function reopenStoreTill(){
+async function reopenStoreTill(){
   const pin = window.prompt("Enter manager PIN to reopen today's till:");
   if(pin === null) return;
-  if(pin !== STORE_PIN){ window.alert("Incorrect PIN."); return; }
+  if(!BACKEND_ENABLED){
+    if(pin !== LOCAL_FALLBACK_PIN){ window.alert("Incorrect PIN."); return; }
+  } else {
+    const res = await apiPost("reopenTill", {mode:"store", date:todayKey(), pin});
+    if(!res.ok){
+      window.alert(res.error==="invalid_pin" ? "Incorrect PIN." : "Couldn't reach the backend to verify the PIN. Check your connection and try again.");
+      return;
+    }
+  }
   const s = state.store;
   s.tillStatus = "open";
   s.closedAt = null;
@@ -420,8 +514,7 @@ function backToOpenChoice(){
   render();
 }
 function confirmOpenSkipCount(){
-  const denoms = Object.assign({}, lastStoreFloat.denoms);
-  startNewStoreDay(denoms, false);
+  startNewStoreDay({}, false, lastStoreFloat.amt);
 }
 function confirmOpenWithCount(){
   const denoms = Object.assign({}, state.store.denoms);
@@ -658,7 +751,7 @@ function renderOpening(mode){
     <div class="card">
       <h3>Opening till</h3>
       ${statusBadge}
-      <p class="sub" style="margin-top:12px;">${s.manualCount ? `Opening float counted: ${fmt(denomTotal(s.denoms))}` : `Opening float assumed from last close: ${fmt(denomTotal(s.denoms))}`}</p>
+      <p class="sub" style="margin-top:12px;">${s.manualCount ? `Opening float counted: ${fmt(openingFloatTotal("store",s))}` : `Opening float assumed from last close: ${fmt(openingFloatTotal("store",s))}`}</p>
       <button class="btn secondary" onclick="setSubtab('store','sell')">Go to sell</button>
     </div>
   `;
@@ -666,7 +759,7 @@ function renderOpening(mode){
 
 function renderClosing(mode){
   const s = state[mode]; const day = s.day;
-  const openingTotal = denomTotal(s.denoms);
+  const openingTotal = openingFloatTotal(mode, s);
   const expected = openingTotal + day.cash;
   const summary = `
     <div class="card">
@@ -711,7 +804,7 @@ function renderClosing(mode){
         <div class="denomgrid">${closeRows}</div>
         <div class="row"><span class="rowlabel">Counted total</span><span class="rowval">${fmt(counted)}</span></div>
         <div class="match ${matches?'ok':'off'}">${matches?"Matches expected.":"Does not match expected; recount before closing."}</div>
-        <button class="btn" onclick="closeTill('${mode}')">Confirm and close till: ends the day</button>
+        <button class="btn" onclick="closeTill()">Confirm and close till: ends the day</button>
       </div>
     `;
   } else {
@@ -719,7 +812,7 @@ function renderClosing(mode){
       <div class="card">
         <h3>Closing till</h3>
         <p class="sub">Automated close: cash reconciliation isn't required for daily store operations.</p>
-        <button class="btn" onclick="closeTill('${mode}')">Confirm and close day</button>
+        <button class="btn" onclick="closeTill()">Confirm and close day</button>
       </div>
     `;
   }
