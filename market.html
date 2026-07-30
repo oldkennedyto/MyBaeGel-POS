@@ -219,7 +219,24 @@ function freshDay(){
 function freshModeState(){
   return {cart:{}, promo:0, payment:"cash", subtab:"sell", day:freshDay(), lastTxn:null, lastVoidReason:null,
     openingDone:false, manualCount:false, marketName:"", denoms:{}, closeDenoms:{}, freeRedemption:null,
-    tillStatus:"closed", openedAt:null, closedAt:null, orderConfirmed:false, openingPrompt:null, expandedChip:null};
+    tillStatus:"closed", openedAt:null, closedAt:null, orderConfirmed:false, openingPrompt:null, expandedChip:null,
+    orderSeq:0, queue:[], queuePanelOpen:false};
+}
+function elapsedText(ts){
+  const mins = Math.floor((Date.now()-ts)/60000);
+  if(mins<1) return "just now";
+  return mins + " min ago";
+}
+function toggleQueuePanel(mode){ state[mode].queuePanelOpen = !state[mode].queuePanelOpen; render(); }
+function fulfillOrder(mode, num){
+  const s = state[mode];
+  s.queue = s.queue.filter(e=>e.num!==num);
+  render();
+}
+function updateQueueElapsed(){
+  document.querySelectorAll('[data-queue-time]').forEach(el=>{
+    el.textContent = elapsedText(Number(el.dataset.queueTime));
+  });
 }
 
 const state = {
@@ -320,11 +337,17 @@ function computeCart(mode){
   const bagelAfterD = bagelEff*(1-discountPct);
   const otherAfterD = otherEff*(1-discountPct);
   const taxExempt = bagelQty >= 6;
-  const taxable = taxExempt ? otherAfterD : (bagelAfterD+otherAfterD);
-  const hst = taxable*HST;
-  const total = bagelAfterD+otherAfterD+hst;
+  const taxableBase = taxExempt ? otherAfterD : (bagelAfterD+otherAfterD);
+  // Cash pricing (2026-07-29, replaces the earlier 13% cash-discount version): cash orders
+  // are tax-INCLUSIVE, not tax-added. The customer pays exactly bagelAfterD+otherAfterD (the
+  // plain menu/discount total, no extra add-on) and HST is back-calculated as the portion of
+  // that already "inside" it (amt * 13/113), for Ivy's own HST remittance bookkeeping - not
+  // charged to the customer on top. EMT/Square are unchanged: HST is added on top as before.
+  const hstIncluded = s.payment==="cash";
+  const hst = hstIncluded ? taxableBase*(HST/(1+HST)) : taxableBase*HST;
+  const total = hstIncluded ? (bagelAfterD+otherAfterD) : (bagelAfterD+otherAfterD+hst);
   const discountAmt = (bagelSub-freeCredit+otherEff) - (bagelAfterD+otherAfterD);
-  return {subtotal, bagelSub, otherSub, bagelQty, totalQty, freeCredit, freeItemName, bagelAfterD, otherAfterD, taxExempt, hst, total, discountAmt, discountPct,
+  return {subtotal, bagelSub, otherSub, bagelQty, totalQty, freeCredit, freeItemName, bagelAfterD, otherAfterD, taxExempt, hst, hstIncluded, total, discountAmt, discountPct,
     okQty, okPrice, sandwichQty, comboPairs, comboDiscount, remainingOkQty, itemLines};
 }
 function findItem(key){
@@ -361,7 +384,9 @@ function completeSale(mode){
   const s = state[mode];
   const c = computeCart(mode);
   if(c.totalQty===0) return;
-  const itemsSummary = Object.keys(s.cart).filter(k=>s.cart[k]>0).map(k=>`${s.cart[k]}x ${findItem(k).name}`).join(", ");
+  const cartKeys = Object.keys(s.cart).filter(k=>s.cart[k]>0);
+  const itemsSummary = cartKeys.map(k=>`${s.cart[k]}x ${findItem(k).name}`).join(", ");
+  const sandwichKeys = cartKeys.filter(k=>findItem(k).comboSandwich);
   const saleRecord = {
     mode, marketName: state.market.marketName,
     date: todayKey(), timestamp: new Date().toISOString(),
@@ -371,7 +396,7 @@ function completeSale(mode){
   };
   const day = s.day;
   day.items += c.totalQty;
-  day.preTax += (c.bagelAfterD+c.otherAfterD);
+  day.preTax += (c.total - c.hst); // total-minus-hst holds for both tax-added (EMT/Square) and tax-inclusive (cash) math
   day.hst += c.hst;
   day.revenue += c.total;
   day[s.payment] += c.total;
@@ -379,9 +404,15 @@ function completeSale(mode){
   if(s.promo===20){ day.d20.count++; day.d20.amt += c.discountAmt; }
   if(c.comboPairs>0){ day.combo.count += c.comboPairs; day.combo.amt += c.comboDiscount; }
   if(c.freeCredit>0){ day.freeItems += 1; day.freeAmt += c.freeCredit; }
+  s.orderSeq += 1;
+  const orderNum = s.orderSeq;
+  if(sandwichKeys.length>0){
+    const sandwichSummary = sandwichKeys.map(k=>`${s.cart[k]}x ${findItem(k).name}`).join(", ");
+    s.queue.push({num:orderNum, items:sandwichSummary, time:Date.now()});
+  }
   s.lastTxn = {total:c.total, payment:s.payment, items:c.totalQty, promo:s.promo, freeCredit:c.freeCredit,
-    preTax:(c.bagelAfterD+c.otherAfterD), hst:c.hst, isD10:s.promo===10, isD20:s.promo===20, discountAmt:c.discountAmt,
-    comboPairs:c.comboPairs, comboDiscount:c.comboDiscount};
+    preTax:(c.total-c.hst), hst:c.hst, isD10:s.promo===10, isD20:s.promo===20, discountAmt:c.discountAmt,
+    comboPairs:c.comboPairs, comboDiscount:c.comboDiscount, orderNum};
   s.cart = {}; s.promo = 0; s.freeRedemption = null; s.orderConfirmed = false;
   render();
   apiPost("recordSale", saleRecord);
@@ -513,7 +544,7 @@ function renderSellBody(){
   const comboNote = state.activeCat==="combo" ? `<div class="combonote">Buy any sandwich with an Old Kennedy drink: $2 off each matched pair, applied automatically. Combo drinks don't count toward 2+/4+ bulk drink pricing.</div>` : "";
   const txnStrip = s.lastTxn ? `<div class="txnstrip">
       <div style="flex:1;">
-        <div>Last sale: ${fmt(s.lastTxn.total)} via ${s.lastTxn.payment.toUpperCase()}</div>
+        <div>Order #${s.lastTxn.orderNum} &middot; Last sale: ${fmt(s.lastTxn.total)} via ${s.lastTxn.payment.toUpperCase()}</div>
         <input class="field" style="margin:6px 0 0;" id="voidreason-market" placeholder="Void reason (optional)">
       </div>
       <a onclick="voidLastSale('market')">Void</a>
@@ -534,6 +565,29 @@ function renderSellBody(){
   `;
 }
 
+function renderQueuePanel(mode){
+  const s = state[mode];
+  if(!s.queuePanelOpen) return "";
+  const rows = s.queue.length===0
+    ? `<p class="sub" style="margin:0;">No sandwich orders cooking right now.</p>`
+    : s.queue.map(e=>`
+      <div class="row" style="align-items:flex-start;">
+        <span class="rowlabel">Order #${e.num}<br><span style="font-size:11px;color:var(--ink);">${e.items}</span><br><span style="font-size:10.5px;" data-queue-time="${e.time}">${elapsedText(e.time)}</span></span>
+        <a class="linklike" onclick="fulfillOrder('${mode}',${e.num})">Fulfilled</a>
+      </div>
+    `).join("");
+  return `
+    <div class="sheet-overlay">
+      <div class="sheet">
+        <div class="sheet-handle"></div>
+        <h3>Orders cooking</h3>
+        <p class="sub">Bagel Sandwiches only &mdash; tap "Fulfilled" once handed over.</p>
+        ${rows}
+        <a class="linklike" style="display:block;text-align:center;margin-top:12px;" onclick="toggleQueuePanel('${mode}')">Close</a>
+      </div>
+    </div>
+  `;
+}
 function renderReviewSheet(){
   const s = state.market;
   if(s.subtab!=="sell" || !s.orderConfirmed) return "";
@@ -583,7 +637,7 @@ function renderReviewSheet(){
         ${c.freeCredit>0?`<div class="row"><span class="rowlabel">Loyalty card credit${c.freeItemName?` (${c.freeItemName})`:""}</span><span class="rowval">-${fmt(c.freeCredit)}</span></div>`:""}
         ${c.comboDiscount>0?`<div class="row"><span class="rowlabel">Combo discount</span><span class="rowval">-${fmt(c.comboDiscount)}</span></div>`:""}
         <div class="row"><span class="rowlabel">Discount (${s.promo}%)</span><span class="rowval">-${fmt(c.discountAmt)}</span></div>
-        <div class="row"><span class="rowlabel">HST</span><span class="rowval">${fmt(c.hst)}</span></div>
+        <div class="row"><span class="rowlabel">${c.hstIncluded?"HST (included in price)":"HST"}</span><span class="rowval">${fmt(c.hst)}</span></div>
         <div class="row"><span class="rowlabel">Total due</span><span class="rowval">${fmt(c.total)}</span></div>
         <p class="sub" style="margin:6px 0 4px;">Payment method</p>
         <div class="pillrow">
@@ -664,15 +718,18 @@ function render(){
       <div class="header-text">
         <div class="header-title">My Bae-Gel &middot; Market</div>
         <div class="header-sub">${s.marketName || "No market selected"} &middot; ${fmtDate(Date.now())}</div>
+        ${s.queue.length>0 ? `<a class="linklike" style="font-size:10.5px;color:var(--accent-dark);" onclick="toggleQueuePanel('market')">${s.queue.length} order${s.queue.length===1?"":"s"} cooking</a><br>` : ""}
         <a class="linklike" style="font-size:10.5px;" onclick="confirmSwitchDevice('store')">Switch to Store device</a>
       </div>
     </div>
     ${subtabsHtml}
     ${mainHtml}
     ${renderReviewSheet()}
+    ${renderQueuePanel("market")}
   `;
 }
 render();
+setInterval(updateQueueElapsed, 15000);
 </script>
 </body>
 </html>
