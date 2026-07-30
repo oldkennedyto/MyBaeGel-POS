@@ -238,14 +238,13 @@ function freshModeState(){
   return {cart:{}, promo:0, payment:"cash", subtab:"sell", day:freshDay(), lastTxn:null, lastVoidReason:null,
     openingDone:false, manualCount:false, marketName:"", denoms:{}, closeDenoms:{}, freeRedemption:null,
     tillStatus:"closed", openedAt:null, closedAt:null, orderConfirmed:false, openingPrompt:null, expandedChip:null,
-    openingFloatAmt:null, orderSeq:0, queue:[], queuePanelOpen:false};
+    openingFloatAmt:null, orderSeq:0, queue:[]};
 }
 function elapsedText(ts){
   const mins = Math.floor((Date.now()-ts)/60000);
   if(mins<1) return "just now";
   return mins + " min ago";
 }
-function toggleQueuePanel(mode){ state[mode].queuePanelOpen = !state[mode].queuePanelOpen; render(); }
 function fulfillOrder(mode, num){
   const s = state[mode];
   s.queue = s.queue.filter(e=>e.num!==num);
@@ -436,8 +435,10 @@ function completeSale(mode){
   s.orderSeq += 1;
   const orderNum = s.orderSeq;
   if(sandwichKeys.length>0){
-    const sandwichSummary = sandwichKeys.map(k=>`${s.cart[k]}x ${findItem(k).name}`).join(", ");
-    s.queue.push({num:orderNum, items:sandwichSummary, time:Date.now()});
+    // Full order, not just the sandwich - if a customer's whole order wasn't handed over
+    // together, the cashier still needs to see everything they're owed, not just the slow item.
+    const fullItems = cartKeys.map(k=>({name:findItem(k).name, qty:s.cart[k], price:findItem(k).price}));
+    s.queue.push({num:orderNum, items:fullItems, time:Date.now()});
   }
   s.lastTxn = {total:c.total, payment:s.payment, items:c.totalQty, promo:s.promo, freeCredit:c.freeCredit,
     preTax:(c.total-c.hst), hst:c.hst, isD10:s.promo===10, isD20:s.promo===20, discountAmt:c.discountAmt,
@@ -552,27 +553,22 @@ function confirmOpenWithCount(){
   lastStoreFloat = {amt, denoms};
   startNewStoreDay(denoms, true);
 }
-function renderQueuePanel(mode){
+function renderQueueTab(mode){
   const s = state[mode];
-  if(!s.queuePanelOpen) return "";
-  const rows = s.queue.length===0
-    ? `<p class="sub" style="margin:0;">No sandwich orders cooking right now.</p>`
-    : s.queue.map(e=>`
-      <div class="row" style="align-items:flex-start;">
-        <span class="rowlabel">Order #${e.num}<br><span style="font-size:11px;color:var(--ink);">${e.items}</span><br><span style="font-size:10.5px;" data-queue-time="${e.time}">${elapsedText(e.time)}</span></span>
-        <a class="linklike" onclick="fulfillOrder('${mode}',${e.num})">Fulfilled</a>
-      </div>
-    `).join("");
-  return `
-    <div class="modal-overlay">
-      <div class="modal-card">
-        <h3>Orders cooking</h3>
-        <p class="sub">Bagel Sandwiches only — tap "Fulfilled" once handed over.</p>
+  if(s.queue.length===0){
+    return `<div class="card"><h3>Orders in progress</h3><p class="sub" style="margin:0 0 0;">No sandwich orders waiting right now.</p></div>`;
+  }
+  return s.queue.map(e=>{
+    const rows = e.items.map(it=>`<div class="row"><span class="rowlabel">${it.name} <span style="color:var(--ink-soft);">x${it.qty}</span></span><span class="rowval">${fmt(it.price)} ea</span></div>`).join("");
+    return `
+      <div class="card">
+        <h3>Order #${e.num}</h3>
+        <p class="sub">Placed ${fmtTime(e.time)} &middot; <span data-queue-time="${e.time}">${elapsedText(e.time)}</span></p>
         ${rows}
-        <a class="linklike" style="display:block;text-align:center;margin-top:12px;" onclick="toggleQueuePanel('${mode}')">Close</a>
+        <button class="btn" onclick="fulfillOrder('${mode}',${e.num})">Mark fulfilled</button>
       </div>
-    </div>
-  `;
+    `;
+  }).join("");
 }
 function renderOpeningPromptModal(){
   if(state.activeMode!=="store" || !state.store.openingPrompt) return "";
@@ -922,10 +918,12 @@ function render(){
     body += `<div class="subtabs">
       <button class="pill ${s.subtab==='opening'?'active':''}" onclick="setSubtab('${mode}','opening')">Opening till</button>
       <button class="pill ${s.subtab==='sell'?'active':''}" ${sellDisabled?"disabled":""} onclick="setSubtab('${mode}','sell')">Sell</button>
+      <button class="pill ${s.subtab==='queue'?'active':''}" onclick="setSubtab('${mode}','queue')">Orders in progress${s.queue.length>0?` (${s.queue.length})`:""}</button>
       <button class="pill ${s.subtab==='closing'?'active':''}" ${closingDisabled?"disabled":""} onclick="setSubtab('${mode}','closing')">Closing till</button>
     </div>`;
     if(s.subtab==="opening") body += renderOpening(mode);
     else if(s.subtab==="sell") body += renderSell(mode);
+    else if(s.subtab==="queue") body += renderQueueTab(mode);
     else body += renderClosing(mode);
   }
   document.getElementById("app").innerHTML = `
@@ -935,7 +933,6 @@ function render(){
         <div class="header-status">
           <div class="hs-line">${fmtDate(Date.now())} &middot; <span id="live-clock">${fmtTime(Date.now())}</span></div>
           <div class="hs-till ${state.store.tillStatus==='open'?'ok':'off'}">Store till: ${state.store.tillStatus==='open'?'OPEN':'CLOSED'}</div>
-          ${state.store.queue.length>0 ? `<a class="linklike" style="font-size:11px;color:var(--accent-dark);" onclick="toggleQueuePanel('store')">${state.store.queue.length} order${state.store.queue.length===1?"":"s"} cooking</a>` : ""}
           <a class="linklike" style="font-size:10.5px;" onclick="confirmSwitchDevice('market')">Switch to Market device</a>
         </div>
       </div>
@@ -949,7 +946,6 @@ function render(){
     </div>
     ${body}
     ${renderOpeningPromptModal()}
-    ${renderQueuePanel("store")}
   `;
 }
 render();
