@@ -268,20 +268,44 @@ const state = {
   activeCat:"plain",
 };
 
+// ===== Local persistence (2026-07-31) =====
+// localStorage is shared across index.html and market.html (same origin), so one key
+// naming scheme works for both files. Two things are cached here:
+//  1. Which device this is (store/market) - so the chooser only has to be answered once
+//     per device, not on every launch/reopen from the home screen icon.
+//  2. Each mode's in-progress state (cart, till/queue/lastTxn, etc.) - so closing the app
+//     or the iPad backgrounding it mid-order doesn't lose what the cashier was doing.
+// The Sheet backend remains authoritative for till status and today's totals - hydrateStore()
+// still runs after a local restore and overlays that server truth on top.
+const DEVICE_KEY = "baegel_device";
+const STATE_KEY_PREFIX = "baegel_state_";
+function saveLocalState(mode){
+  try{ localStorage.setItem(STATE_KEY_PREFIX+mode, JSON.stringify(state[mode])); }catch(err){ /* storage unavailable/full - not fatal, just skip caching */ }
+}
+function loadLocalState(mode){
+  try{
+    const raw = localStorage.getItem(STATE_KEY_PREFIX+mode);
+    if(!raw) return;
+    Object.assign(state[mode], JSON.parse(raw));
+  }catch(err){ /* corrupt cache - ignore, keep fresh defaults */ }
+}
+
 let deviceChosen = false;
-function chooseDevice(mode){
-  if(mode==="market"){ window.location.href = "market.html"; return; }
+function activateDevice(mode){
   deviceChosen = true;
+  try{ localStorage.setItem(DEVICE_KEY, mode); }catch(err){}
+  loadLocalState(mode);
   render();
   hydrateStore();
 }
+function chooseDevice(mode){
+  if(mode==="market"){ window.location.href = "market.html"; return; }
+  activateDevice("store");
+}
 function confirmSwitchDevice(target){
-  const s = state.store;
-  const hasData = s.tillStatus==="open" || s.day.items>0 || Object.keys(s.cart).length>0;
-  const msg = hasData
-    ? "Switch to Market mode? This device isn't saving data yet, so today's Store till status and sales on this iPad will be lost when you come back."
-    : "Switch to Market mode on this device?";
-  if(!window.confirm(msg)) return;
+  // Store's state is cached locally (see saveLocalState) and will restore when you come
+  // back, so this is just a light confirmation now, not a data-loss warning.
+  if(!window.confirm("Switch to Market mode on this device?")) return;
   window.location.href = "market.html";
 }
 function renderDeviceChooser(){
@@ -947,8 +971,10 @@ function render(){
     ${body}
     ${renderOpeningPromptModal()}
   `;
+  saveLocalState("store");
 }
-render();
+const savedDevice = (function(){ try{ return localStorage.getItem(DEVICE_KEY); }catch(err){ return null; } })();
+if(savedDevice==="store"){ activateDevice("store"); } else { render(); }
 function updateClock(){
   const el = document.getElementById("live-clock");
   if(el) el.textContent = fmtTime(Date.now());
